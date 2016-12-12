@@ -1,0 +1,84 @@
+version: '2.0'
+
+name: wb
+description: demo workbook for Wroclaw Openstack Meetup
+
+workflows:
+    create_vms:
+        type: direct
+        input:
+            - vm_names
+
+        tasks:
+            T1:
+                with-items: vm in <% $.vm_names %>
+                workflow: wb.create_vm
+                input:
+                    vm_name: <% $.vm %>
+                concurrency: 1
+    create_vm:
+        type: direct
+        input:
+            - vm_name
+
+        tasks:
+            T1:
+                action: nova.servers_create
+                input:
+                    name: <% $.vm_name %>
+                    image: "2c60a713-bbba-4696-adff-c80a12cab7d8"
+                    flavor: "42"
+                    nics:
+                        - net-id: "eb6c7f6b-100f-41bb-9c5d-11975a2cdba6"
+
+                on-success: T3
+                on-error: T6
+                publish:
+                    vm_id: <% task(T1).result.id%>
+
+            T2:
+                action: neutron.create_floatingip 
+                input: 
+                    body: 
+                        floatingip:
+                            floating_network_id: "adcde6aa-699d-4238-845a-56eeb0564c4f"
+                on-success: T3
+                on-error: T6
+                publish:
+                    floating_ip: <% task(T2).result.floatingip.floating_ip_address %>
+
+            T3:
+                action: nova.servers_add_floating_ip
+                input:
+                    server: <% $.vm_id %>
+                    address: <% $.floating_ip %>
+                retry:
+                    delay: 5
+                    count: 12
+                on-success: T4
+                on-error: T6
+                join: all
+
+            T4:
+                action: std.ssh
+                input:
+                    cmd: "echo test >> test.txt"
+                    host: <% $.floating_ip %>
+                    username: "cirros"
+                    password: "cubswin:)"
+                retry:
+                    delay: 5
+                    count: 12
+                on-error: T6
+
+            T5:
+                action: my_action.get_free_ip
+                publish:
+                    floating_ip: <% task(T5).result.ip_address %>
+                on-success: T3
+                on-error: T2
+
+            T6:
+                action: std.echo output="Something terrible happend!"
+                on-success: fail
+
